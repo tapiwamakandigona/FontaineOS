@@ -124,13 +124,14 @@ extern "C" void keyboard_handler() {
                 }
 
                 // Push our block straight onto sector 1 of the virtual hard drive
-                                // Fixed: Explicitly passing the memory address of the first array element
-                ata_write_sector(1, &test_buffer[0]);
+                // Fixed: Pass the clean array handle directly to satisfy block constraints
+                ata_write_sector(1, test_buffer);
 
                 for (int i = 0; i < 512; i++) test_buffer[i] = 0;
 
-                // Fixed: Explicitly passing the memory address for reading back data traces
-                ata_read_sector(1, &test_buffer[0]);
+                // Fixed: Pass the clean array handle directly for raw byte sector extraction
+                ata_read_sector(1, test_buffer);
+
 
 
                 // Print the verification payload response below our command prompt

@@ -47,15 +47,16 @@ void task_beta_routine() {
                 const char* reply = ">> [FontaineOS Terminal Help: Commands are 'help' and 'clear']";
                 int i = 0;
                 while (reply[i] != '\0') {
-                    video_memory[1120 + (i * 2)] = reply[i]; // Print on row 8
-                    video_memory[1120 + (i * 2) + 1] = 0x0D; // Purple output style
+                    // Fixed: Offset shifted to 1760 (Row 11) to print below your inputs
+                    video_memory[1760 + (i * 2)] = reply[i];
+                    video_memory[1760 + (i * 2) + 1] = 0x0D; // Purple output style
                     i++;
                 }
             }
             // Check command target index: Custom 'clear' command match routing
             else if (command[0] == 'c' && command[1] == 'l' && command[2] == 'e' && command[3] == 'a' && command[4] == 'r') {
-                // Clear out the bottom half rows of our display grid frame arrays
-                for (int i = 800; i < 4000; i = i + 2) {
+                // Fixed: Loop now starts at 1600 to clear inputs without erasing the cyan label at 1440
+                for (int i = 1600; i < 4000; i = i + 2) {
                     video_memory[i] = ' ';
                     video_memory[i + 1] = 0x07;
                 }

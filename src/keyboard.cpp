@@ -98,6 +98,9 @@ extern "C" void keyboard_handler() {
             cursor_position = ((cursor_position / 160) + 1) * 160;
             scroll_screen();
 
+            // Tracking flag token to isolate command validation loops cleanly
+            bool command_processed = false;
+
             if (mystrcmp(cmd_buffer, "help") == true) {
                 const char* reply = ">> [FontaineOS Help: Commands are 'help', 'clear', and 'disktest']";
                 int i = 0;
@@ -109,6 +112,7 @@ extern "C" void keyboard_handler() {
                 }
                 cursor_position = ((cursor_position / 160) + 1) * 160;
                 scroll_screen();
+                command_processed = true;
             }
             else if (mystrcmp(cmd_buffer, "clear") == true) {
                 for (int i = 1600; i < 4000; i = i + 2) {
@@ -116,6 +120,7 @@ extern "C" void keyboard_handler() {
                     video_memory[i + 1] = 0x07;
                 }
                 cursor_position = 1600;
+                command_processed = true;
             }
             else if (mystrcmp(cmd_buffer, "disktest") == true) {
                 extern void ata_write_sector(uint32_t lba, const uint8_t* buffer);
@@ -149,8 +154,10 @@ extern "C" void keyboard_handler() {
                 }
                 cursor_position = ((cursor_position / 160) + 1) * 160;
                 scroll_screen();
+                command_processed = true;
             }
-            else if (cmd_buffer[0] != '\0') {
+            /* The Guarded Fallback catch-all error handler loop router */
+            else if (command_processed == false && cmd_buffer[0] != '\0') {
                 const char* error_reply = ">> Command not found! Type 'help' for options.";
                 int i = 0;
                 while (error_reply[i] != '\0') {
@@ -180,7 +187,6 @@ extern "C" void keyboard_handler() {
             video_memory[cursor_position] = character;
             video_memory[cursor_position + 1] = 0x0E; // Yellow font
             cursor_position = cursor_position + 2;
-            scroll_screen();
         }
     }
     outb(0x20, 0x20);

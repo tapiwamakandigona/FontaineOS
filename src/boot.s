@@ -12,9 +12,11 @@ align 4
 section .text
 global _start
 global isr0_handler_stub
+global irq0_handler_stub ; Expose our brand new timer interrupt gate stub label
 
 extern kernel_main
 extern divide_by_zero_handler
+extern timer_handler     ; Reference our external C++ clock routine handler
 
 _start:
     ; Hand over our newly allocated stack boundary pointer to the CPU stack register
@@ -29,14 +31,19 @@ halt_loop:
     hlt
     jmp halt_loop
 
-; This is our raw low-level hardware entry stub for Interrupt 0
+; This is our raw low-level hardware entry stub for Interrupt 0 (Exception Trap)
 isr0_handler_stub:
     pusha                    ; Push all general-purpose CPU registers onto the stack to save their state
-
     call divide_by_zero_handler ; Jump directly into our C++ error log function
-
     popa                     ; Restore all general-purpose CPU registers back to normal state
-    iret                     ; Interrupt Return: pops the saved CPU flags and tracking registers back on the fly
+    iret                     ; Interrupt Return
+
+; This is our raw low-level hardware entry stub for Interrupt 32 (System Timer IRQ 0)
+irq0_handler_stub:
+    pusha                    ; Caches general-purpose CPU registers to protect active calculations
+    call timer_handler       ; Jump straight into our live ticking C++ routine block
+    popa                     ; Restores register configurations cleanly
+    iret                     ; Special return command explicitly pops instruction pointer matrices
 
 section .bss
 align 16

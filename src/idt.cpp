@@ -13,23 +13,15 @@ void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[num].base_high = (base >> 16) & 0xFFFF;
     idt[num].sel       = sel;
     idt[num].always0   = 0;
-
-    /*
-       Flags 0x8E = Present, Ring 0 (Kernel Privilege Mode),
-       32-bit Interrupt Gate descriptor format profile.
-    */
     idt[num].flags     = flags;
 }
 
-/*
-   Exposing an explicit assembly label hook. This matches the special low-level
-   assembly wrapper we will create inside our boot sequence in the next phase.
-*/
+// Assembly handler hooks matching our boot layer stubs
 extern "C" void isr0_handler_stub();
+extern "C" void irq0_handler_stub(); // Our brand new hardware clock assembly stub link!
 
 /*
-   Our direct C++ exception target routine. When an exception triggers,
-   the CPU context loops straight here.
+   Our direct C++ exception target routine for a Division by Zero error.
 */
 extern "C" void divide_by_zero_handler() {
     volatile char* video_memory = (volatile char*)0xB8000;
@@ -38,16 +30,9 @@ extern "C" void divide_by_zero_handler() {
     int i = 0;
     while (error_msg[i] != '\0') {
         video_memory[i * 2] = error_msg[i];
-
-        /*
-           0x4F represents a brilliant White text color mapped onto an
-           Emergency Bright Red alert background matrix.
-        */
         video_memory[i * 2 + 1] = 0x4F;
         i++;
     }
-
-    // Halt the core execution tracking sequence completely for hardware system safety
     while (true) {
         asm volatile("cli; hlt");
     }
@@ -66,15 +51,16 @@ void init_idt() {
         idt_set_gate(i, 0, 0, 0);
     }
 
-    /*
-       3. Register Interrupt Line 0 (Division by Zero Exception)
-       0x08 is our target GDT Kernel Code Segment offset index selector.
-    */
+    // 3. Register Interrupt Line 0 (Division by Zero Exception)
     idt_set_gate(0, (uint32_t)isr0_handler_stub, 0x08, 0x8E);
 
     /*
-       4. Inform the CPU register hardware where our table sits in RAM space.
-       'lidt' loads our pointer mapping block, loading the switchboard on the fly.
+       4. Register Interrupt Line 32 (Hardware Timer IRQ 0).
+       0x08 is our target GDT Kernel Code Segment selector offset.
+       0x8E marks this as a Present Kernel Privilege Interception Gate.
     */
+    idt_set_gate(32, (uint32_t)irq0_handler_stub, 0x08, 0x8E);
+
+    // 5. Inform the CPU register hardware where our table sits in RAM space
     asm volatile("lidt (%0)" : : "r" (&idp));
 }

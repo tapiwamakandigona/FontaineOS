@@ -1,5 +1,6 @@
 #include "gdt.h"
 #include "idt.h"
+#include "timer.h"
 
 extern "C" void kernel_main() {
     /* Step 1: Initialize the Global Descriptor Table (GDT) */
@@ -9,24 +10,39 @@ extern "C" void kernel_main() {
     init_idt();
 
     /*
-       Step 3: Force a deliberate division-by-zero exception to test our IDT.
-       We mark these variables 'volatile' so the C++ compiler's optimization layer
-       doesn't calculate the result at compile-time. We force the raw laptop CPU
-       hardware mathematical execution pipelines to evaluate this equation at runtime.
+       Step 3: Initialize the Programmable Interval Timer (PIT).
+       We pass the parameter 100 to request exactly 100 ticks per second.
     */
-    volatile int num = 10;
-    volatile int den = 0;
-    volatile int crash = num / den; // The CPU will instantly intercept this math error here!
+    init_timer(100);
 
-    /* This line should NEVER be reached if our IDT works perfectly */
+    /*
+       Step 4: Enable Hardware Interrupts.
+       Up until now, the CPU ignored the motherboard. 'sti' instructs the
+       internal execution engine to open up the IRQ signal pathways.
+    */
+    asm volatile("sti");
+
+    /* Print a clean operational baseline message across the screen matrix */
     volatile char* video_memory = (volatile char*)0xB8000;
-    const char* message = "If you see this, the trap failed!";
+    const char* message = "FontaineOS Kernel Matrix Live! System Clock Pulses Active.";
+
     int i = 0;
     while (message[i] != '\0') {
         video_memory[i * 2] = message[i];
-        video_memory[i * 2 + 1] = 0x0A;
+
+        /*
+           0x0B represents a brilliant Light Cyan / Cyan color on a Black background.
+           We switch to cyan to show the clock-interrupt tracking sequence is operating!
+        */
+        video_memory[i * 2 + 1] = 0x0B;
         i++;
     }
 
-    while (true) {}
+    /*
+       Keep the kernel alive. Every single second, the timer interrupt will
+       instantly interrupt this loop to cycle updates onto our screen text buffer.
+    */
+    while (true) {
+        // CPU spins safely here, handing execution over to the timer handler on tick events
+    }
 }

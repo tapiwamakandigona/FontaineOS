@@ -43,7 +43,6 @@ extern "C" {
     }
 }
 
-
 extern "C" void keyboard_handler() {
     uint8_t scancode = inb(0x60);
 
@@ -55,8 +54,8 @@ extern "C" void keyboard_handler() {
             cmd_buffer[cmd_index] = '\0';
             command_ready_flag = 1;
 
-            // Advance text cursor cleanly to the start of the next blank row line space
-            cursor_position = ((cursor_position / 160) + 1) * 160;
+            // FIX: Removed the cursor advancement math line from here!
+            // The shell thread (task_beta_routine) now handles advancing the row cleanly.
         }
         else if (character == '\b' && cmd_index > 0) {
             // Handle Backspace operations safely

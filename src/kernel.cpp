@@ -8,28 +8,11 @@
 #include "keyboard.h"
 
 uint32_t count_alpha = 0;
-
-/*
-   Thread Task Alpha.
-   Runs concurrently on its own private stack and prints system cycle counts on row 3.
-*/
-void task_alpha_routine() {
-    volatile char* video_memory = (volatile char*)0xB8000;
-    while (true) {
-        count_alpha = count_alpha + 1;
-        char state_char = '0' + (count_alpha % 10);
-
-        // Fixed: Offset shifted to 430 so the ticking digit sits at the end of the message text!
-        video_memory[430] = state_char;
-        video_memory[431] = 0x0A; // Light Green style ticker
-
-        for (uint32_t delay = 0; delay < 10000000; delay++) { asm volatile(""); }
-    }
-}
+uint32_t count_beta = 0;
 
 /*
    A lightweight, bare-metal string comparison utility.
-   Fixed: Enforces strict index checking and stops comparison directly at the null byte!
+   Enforces strict AND logic bounds so matching stops exactly at the null terminator!
 */
 bool mystrcmp(const char* str1, const char* str2) {
     int i = 0;
@@ -43,93 +26,38 @@ bool mystrcmp(const char* str1, const char* str2) {
 }
 
 /*
-   Thread Task Beta (Our Live Kernel Command Shell Module!).
-   Monitors our global keyboard buffer. If you type 'help' or 'clear',
-   the kernel executes the corresponding custom script lines in real-time!
+   Thread Task Alpha.
+   Runs concurrently on its own private stack and prints system cycle counts on row 3.
 */
-void task_beta_routine() {
+void task_alpha_routine() {
     volatile char* video_memory = (volatile char*)0xB8000;
-    extern uint32_t cursor_position; // Import our live keyboard screen index pointer
-
     while (true) {
-        char* command = get_shell_command();
+        count_alpha = count_alpha + 1;
+        char state_char = '0' + (count_alpha % 10);
 
-        if (command != nullptr) {
-            /*
-               Step 1: Instantly lock out interrupts and cache the string locally
-               to isolate our data from asynchronous hardware modifications!
-            */
-            asm volatile("cli");
+        video_memory[430] = state_char;
+        video_memory[431] = 0x0A; // Light Green style ticker
 
-            char local_cmd[64];
-            int c_idx = 0;
-            while (command[c_idx] != '\0' && c_idx < 63) {
-                local_cmd[c_idx] = command[c_idx];
-                c_idx++;
-            }
-            local_cmd[c_idx] = '\0';
-
-            // Step 2: Instantly free the keyboard driver buffer layout so it can take new keys
-            clear_shell_command();
-            asm volatile("sti");
-
-            /* Step 3: Run our string evaluations safely on our own local stack copy */
-            if (mystrcmp(local_cmd, "help") == true) {
-                const char* reply = ">> [FontaineOS Terminal Help: Commands are 'help' and 'clear']";
-                int i = 0;
-
-                while (reply[i] != '\0') {
-                    video_memory[cursor_position] = reply[i];
-                    video_memory[cursor_position + 1] = 0x0D; // Purple style font
-                    cursor_position = cursor_position + 2;
-                    i++;
-                }
-
-                // Advance text cursor cleanly to the start of the next blank row line space
-                cursor_position = ((cursor_position / 160) + 1) * 160;
-            }
-            else if (mystrcmp(local_cmd, "clear") == true) {
-                // Clear text matrices from Row 10 down to the bottom of the visible screen boundaries
-                for (int i = 1600; i < 4000; i = i + 2) {
-                    video_memory[i] = ' ';
-                    video_memory[i + 1] = 0x07; // Default style reset
-                }
-                cursor_position = 1600;
-            }
-            /* The Fallback Catch-All Router to Resend Help Instructions if commands don't match */
-            else if (local_cmd[0] != '\0') {
-                const char* error_reply = ">> Command not found! Type 'help' for options.";
-                int i = 0;
-
-                while (error_reply[i] != '\0') {
-                    video_memory[cursor_position] = error_reply[i];
-                    video_memory[cursor_position + 1] = 0x0D; // Purple style font
-                    cursor_position = cursor_position + 2;
-                    i++;
-                }
-
-                cursor_position = ((cursor_position / 160) + 1) * 160;
-            }
-
-            else {
-                // Handle unknown input command exceptions gracefully
-                const char* error_reply = ">> Unknown command. Type 'help' or 'clear'.";
-                int i = 0;
-                while (error_reply[i] != '\0') {
-                    video_memory[cursor_position] = error_reply[i];
-                    video_memory[cursor_position + 1] = 0x04; // Red style error font
-                    cursor_position = cursor_position + 2;
-                    i++;
-                }
-                cursor_position = ((cursor_position / 160) + 1) * 160;
-            }
-        }
-
-        for (uint32_t delay = 0; delay < 2000000; delay++) { asm volatile(""); }
+        for (uint32_t delay = 0; delay < 10000000; delay++) { asm volatile(""); }
     }
 }
 
+/*
+   Thread Task Beta.
+   Runs concurrently alongside Task Alpha and updates its own separate status ticker on row 4!
+*/
+void task_beta_routine() {
+    volatile char* video_memory = (volatile char*)0xB8000;
+    while (true) {
+        count_beta = count_beta + 1;
+        char state_char = '0' + (count_beta % 10);
 
+        video_memory[590] = state_char;
+        video_memory[591] = 0x0D; // Light Purple style ticker
+
+        for (uint32_t delay = 0; delay < 10000000; delay++) { asm volatile(""); }
+    }
+}
 
 extern "C" void kernel_main() {
     /* Step 1: Initialize the Core System Engine Segments */
@@ -140,15 +68,11 @@ extern "C" void kernel_main() {
     init_vmm();
     init_heap(0x300000, 256);
 
-    /*
-       Fixed: Explicitly initialize and unlock the keyboard device driver
-       so hardware port 0x60 can stream data vectors cleanly!
-    */
+    /* Initialize our hardware keyboard subsystem */
     init_keyboard();
 
     /* Step 2: Initialize the Multitasking Scheduler Layer */
     init_multitasking();
-
 
     /* Step 3: Spawn our parallel runtime threads */
     create_thread(task_alpha_routine);
@@ -159,6 +83,7 @@ extern "C" void kernel_main() {
 
     const char* msg_master = "FontaineOS Architecture Complete! Task Scheduler Loops Active.";
     const char* msg_alpha  = "[Task Alpha Running Concurrently] Cycle State Ticking: ";
+    const char* msg_beta   = "[Task Beta Running Concurrently] Cycle State Ticking:  ";
     const char* msg_shell  = "FontaineOS Console Interface Live. Type 'help' or 'clear':";
 
     int i = 0;
@@ -176,8 +101,14 @@ extern "C" void kernel_main() {
     }
 
     i = 0;
+    while (msg_beta[i] != '\0') {
+        video_memory[480 + (i * 2)] = msg_beta[i];
+        video_memory[480 + (i * 2) + 1] = 0x0D; // Light Purple style on Row 4
+        i++;
+    }
+
+    i = 0;
     while (msg_shell[i] != '\0') {
-        // Fixed: Shifted down to offset 1440 (Row 9) so it hovers perfectly above our typing line!
         video_memory[1440 + (i * 2)] = msg_shell[i];
         video_memory[1440 + (i * 2) + 1] = 0x0B; // Light Cyan style on Row 9
         i++;

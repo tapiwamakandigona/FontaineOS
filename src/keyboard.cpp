@@ -3,10 +3,6 @@
 
 /*
    A lightweight, bare-metal string comparison utility.
-   Bypasses cross-module linkage optimization barriers.
-*/
-/*
-   A lightweight, bare-metal string comparison utility.
    Fixed: Marked static to prevent global linker namespace collisions!
 */
 static bool mystrcmp(const char* str1, const char* str2) {
@@ -20,7 +16,6 @@ static bool mystrcmp(const char* str1, const char* str2) {
     return (str1[i] == '\0' && str2[i] == '\0');
 }
 
-
 inline uint8_t inb(uint16_t port) {
     uint8_t ret;
     asm volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
@@ -30,16 +25,11 @@ inline uint8_t inb(uint16_t port) {
 // Initial prompt line starts at Row 10 (1600 bytes offset)
 uint32_t cursor_position = 1600;
 
-
 char cmd_buffer[64];
 uint32_t cmd_index = 0;
 volatile uint8_t command_ready_flag = 0;
 
-/*
-   Fixed Buffer Allocation:
-   Explicitly appending array brackets to allocate exactly 512 bytes
-   of continuous binary storage data space!
-*/
+// Fixed Buffer Allocation: Explicit global allocation container with 4-byte tracking alignment bounds
 uint8_t disk_test_pad[512] __attribute__((aligned(4)));
 
 /* US Keyboard Map Index */
@@ -76,19 +66,12 @@ extern "C" void keyboard_handler() {
         char character = kbd_us[scancode];
 
         if (character == '\n') {
-            // User hit ENTER. Lock the text string segment buffer.
             cmd_buffer[cmd_index] = '\0';
 
             volatile char* video_memory = (volatile char*)0xB8000;
             cursor_position = ((cursor_position / 160) + 1) * 160;
 
-            /*
-               Atomic Interrupt Level Evaluation:
-               We check the strings right here inside the hardware interrupt handler,
-               safely protected from thread context switches or memory cache drift!
-            */
             if (mystrcmp(cmd_buffer, "help") == true) {
-                // Updated menu guidelines string tracking
                 const char* reply = ">> [FontaineOS Help: Commands are 'help', 'clear', and 'disktest']";
                 int i = 0;
                 while (reply[i] != '\0') {
@@ -106,17 +89,11 @@ extern "C" void keyboard_handler() {
                 }
                 cursor_position = 1600;
             }
-            /*
-               The Live Hard Drive Controller Test Gate:
-               Explicitly imports our new hardware functions from src/ata.cpp.
-            */
             else if (mystrcmp(cmd_buffer, "disktest") == true) {
                 extern void ata_write_sector(uint32_t lba, const uint8_t* buffer);
                 extern void ata_read_sector(uint32_t lba, uint8_t* buffer);
 
-                // Fixed: Nested extern statement stripped away to reference our top global scope space
                 for (int i = 0; i < 512; i++) disk_test_pad[i] = 0;
-
 
                 const char* secret = "SUCCESS: STREAMED DATA STRAIGHT FROM HARD DRIVE SECTOR PLATES!";
                 int len = 0;
@@ -134,18 +111,21 @@ extern "C" void keyboard_handler() {
                 // Stream Sector 1 directly back off the IDE bus into our global buffer
                 ata_read_sector(1, disk_test_pad);
 
+                /*
+                   Fixed Volatile Pointer Mapping:
+                   Forces the print scanner loop to explicitly evaluate the actual RAM memory addresses,
+                   bypassing the aggressive -O2 register caching layers completely!
+                */
+                volatile uint8_t* v_pad = (volatile uint8_t*)disk_test_pad;
                 int i = 0;
-                while (disk_test_pad[i] != 0 && i < 512) {
-                    video_memory[cursor_position] = (char)disk_test_pad[i];
+                while (v_pad[i] != 0 && i < 512) {
+                    video_memory[cursor_position] = (char)v_pad[i];
                     video_memory[cursor_position + 1] = 0x0D; // Purple text style
                     cursor_position = cursor_position + 2;
                     i++;
                 }
                 cursor_position = ((cursor_position / 160) + 1) * 160;
             }
-
-
-            /* Fallback router: If it doesn't match our valid commands, guide the user */
             else if (cmd_buffer[0] != '\0') {
                 const char* error_reply = ">> Command not found! Type 'help' for options.";
                 int i = 0;
@@ -158,7 +138,6 @@ extern "C" void keyboard_handler() {
                 cursor_position = ((cursor_position / 160) + 1) * 160;
             }
 
-            // Clean our buffer arrays instantly for the next input prompt line
             clear_shell_command();
         }
         else if (character == '\b' && cmd_index > 0) {

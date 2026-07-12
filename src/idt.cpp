@@ -18,7 +18,8 @@ void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
 
 // Assembly handler hooks matching our boot layer stubs
 extern "C" void isr0_handler_stub();
-extern "C" void irq0_handler_stub(); // Our brand new hardware clock assembly stub link!
+extern "C" void irq0_handler_stub();
+extern "C" void irq1_handler_stub(); // Our brand new hardware keyboard assembly stub link!
 
 /*
    Our direct C++ exception target routine for a Division by Zero error.
@@ -54,13 +55,16 @@ void init_idt() {
     // 3. Register Interrupt Line 0 (Division by Zero Exception)
     idt_set_gate(0, (uint32_t)isr0_handler_stub, 0x08, 0x8E);
 
+    // 4. Register Interrupt Line 32 (Hardware Timer IRQ 0)
+    idt_set_gate(32, (uint32_t)irq0_handler_stub, 0x08, 0x8E);
+
     /*
-       4. Register Interrupt Line 32 (Hardware Timer IRQ 0).
+       5. Register Interrupt Line 33 (Hardware Keyboard IRQ 1).
        0x08 is our target GDT Kernel Code Segment selector offset.
        0x8E marks this as a Present Kernel Privilege Interception Gate.
     */
-    idt_set_gate(32, (uint32_t)irq0_handler_stub, 0x08, 0x8E);
+    idt_set_gate(33, (uint32_t)irq1_handler_stub, 0x08, 0x8E);
 
-    // 5. Inform the CPU register hardware where our table sits in RAM space
+    // 6. Inform the CPU register hardware where our table sits in RAM space
     asm volatile("lidt (%0)" : : "r" (&idp));
 }

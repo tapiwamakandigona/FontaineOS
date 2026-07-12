@@ -5,14 +5,6 @@
 volatile uint32_t timer_ticks = 0;
 
 /*
-   Low-level hardware bus communications.
-   Sends a single 8-bit byte out onto the motherboard hardware port address bus line.
-*/
-inline void outb(uint16_t port, uint8_t val) {
-    asm volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-/*
    Remaps the Programmable Interrupt Controller (PIC).
    By default, the motherboard routes hardware timer ticks to Interrupt 8, which
    causes collisions with CPU Exceptions. We remap them to start safely at Interrupt 32.
@@ -82,4 +74,3 @@ extern "C" void timer_handler() {
     */
     outb(0x20, 0x20);
 }
-

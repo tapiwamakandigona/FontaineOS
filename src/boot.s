@@ -12,11 +12,13 @@ align 4
 section .text
 global _start
 global isr0_handler_stub
-global irq0_handler_stub ; Expose our brand new timer interrupt gate stub label
+global irq0_handler_stub
+global irq1_handler_stub ; Expose our brand new keyboard interrupt gate stub label
 
 extern kernel_main
 extern divide_by_zero_handler
-extern timer_handler     ; Reference our external C++ clock routine handler
+extern timer_handler
+extern keyboard_handler  ; Reference our external C++ keyboard routine handler
 
 _start:
     ; Hand over our newly allocated stack boundary pointer to the CPU stack register
@@ -42,6 +44,13 @@ isr0_handler_stub:
 irq0_handler_stub:
     pusha                    ; Caches general-purpose CPU registers to protect active calculations
     call timer_handler       ; Jump straight into our live ticking C++ routine block
+    popa                     ; Restores register configurations cleanly
+    iret                     ; Special return command explicitly pops instruction pointer matrices
+
+; This is our raw low-level hardware entry stub for Interrupt 33 (System Keyboard IRQ 1)
+irq1_handler_stub:
+    pusha                    ; Caches general-purpose CPU registers to protect active calculations
+    call keyboard_handler    ; Jump straight into our live parsing C++ driver block
     popa                     ; Restores register configurations cleanly
     iret                     ; Special return command explicitly pops instruction pointer matrices
 

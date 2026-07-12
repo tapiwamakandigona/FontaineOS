@@ -68,42 +68,37 @@ void task_beta_routine() {
 
         if (command != nullptr) {
             /*
-               Direct pointer byte comparison.
-               Bypasses compiler optimization layers completely.
+               Critical Section Protection:
+               Temporarily pause the system timer interrupts so our thread can process
+               the string bytes and paint the screen with absolute atomic safety!
             */
+            asm volatile("cli");
+
             if (mystrcmp(command, "help") == true) {
                 const char* reply = ">> [FontaineOS Terminal Help: Commands are 'help' and 'clear']";
                 int i = 0;
                 while (reply[i] != '\0') {
                     video_memory[1760 + (i * 2)] = reply[i]; // Print on Row 11
-                    video_memory[1760 + (i * 2) + 1] = 0x0D; // Purple output style
+                    video_memory[1760 + (i * 2) + 1] = 0x0D; // Purple style
                     i++;
                 }
             }
             else if (mystrcmp(command, "clear") == true) {
-                // Clear out the bottom half rows of our display grid frame arrays
+                // Wipe the entire display interface space below our cyan prompt label
                 for (int i = 1600; i < 4000; i = i + 2) {
                     video_memory[i] = ' ';
-                    video_memory[i + 1] = 0x07;
+                    video_memory[i + 1] = 0x07; // Default style reset
                 }
-                // Snap our hardware text layout printing tracker back to the start of Row 10
                 cursor_position = 1600;
             }
 
-            // Check command target index: Custom 'clear' command match routing
-            else if (mystrcmp(command, "clear")) {
-                // Clear out the bottom half rows of our display grid frame arrays
-                for (int i = 1600; i < 4000; i = i + 2) {
-                    video_memory[i] = ' ';
-                    video_memory[i + 1] = 0x07;
-                }
-                // Snap our hardware text layout printing tracker back to the start of Row 10
-                cursor_position = 1600;
-            }
-
-            // Wipe our buffer matrices clean so we can take the next prompt line instruction
+            // Clean the input buffer safely while interrupts are still locked out
             clear_shell_command();
+
+            /* Re-enable system interrupts cleanly now that our data operations are locked */
+            asm volatile("sti");
         }
+
 
         for (uint32_t delay = 0; delay < 2000000; delay++) { asm volatile(""); }
     }

@@ -10,6 +10,22 @@
 uint32_t count_alpha = 0;
 
 /*
+   A lightweight, bare-metal string comparison utility.
+   Fixed: Enforces strict AND logic bounds so matching stops exactly at the null terminator!
+*/
+bool mystrcmp(const char* str1, const char* str2) {
+    int i = 0;
+    while (str1[i] != '\0' && str2[i] != '\0') {
+        if (str1[i] != str2[i]) {
+            return false;
+        }
+        i++;
+    }
+    // Double check that both strings terminated at the exact same index length position
+    return (str1[i] == '\0' && str2[i] == '\0');
+}
+
+/*
    Thread Task Alpha.
    Runs concurrently on its own private stack and prints system cycle counts on row 3.
 */
@@ -32,49 +48,34 @@ void task_alpha_routine() {
    Monitors our global keyboard buffer. If you type 'help' or 'clear',
    the kernel executes the corresponding custom script lines in real-time!
 */
-/*
-   A lightweight, bare-metal string comparison utility.
-   Returns true if both character pointers contain the exact same text string.
-*/
-/*
-   A lightweight, bare-metal string comparison utility.
-   Fixed: Enforces strict AND logic bounds so matching stops exactly at the null terminator!
-*/
-bool mystrcmp(const char* str1, const char* str2) {
-    int i = 0;
-    while (str1[i] != '\0' && str2[i] != '\0') {
-        if (str1[i] != str2[i]) {
-            return false;
-        }
-        i++;
-    }
-    // Double check that both strings terminated at the exact same index length position
-    return (str1[i] == '\0' && str2[i] == '\0');
-}
-
-
-/*
-   Thread Task Beta (Our Live Kernel Command Shell Module!).
-   Monitors our global keyboard buffer. If you type 'help' or 'clear',
-   the kernel executes the corresponding custom script lines in real-time!
-*/
 void task_beta_routine() {
     volatile char* video_memory = (volatile char*)0xB8000;
     extern uint32_t cursor_position; // Import our live keyboard screen index pointer
 
     while (true) {
-        // Query if our keyboard engine has caught a fresh instruction string command
         char* command = get_shell_command();
 
         if (command != nullptr) {
             /*
-               Critical Section Protection:
-               Temporarily pause the system timer interrupts so our thread can process
-               the string bytes and paint the screen with absolute atomic safety!
+               Step 1: Instantly lock out interrupts and cache the string locally
+               to isolate our data from asynchronous hardware modifications!
             */
             asm volatile("cli");
 
-            if (mystrcmp(command, "help") == true) {
+            char local_cmd[64];
+            int c_idx = 0;
+            while (command[c_idx] != '\0' && c_idx < 63) {
+                local_cmd[c_idx] = command[c_idx];
+                c_idx++;
+            }
+            local_cmd[c_idx] = '\0';
+
+            // Step 2: Instantly free the keyboard driver buffer layout so it can take new keys
+            clear_shell_command();
+            asm volatile("sti");
+
+            /* Step 3: Run our string evaluations safely on our own local stack copy */
+            if (mystrcmp(local_cmd, "help") == true) {
                 const char* reply = ">> [FontaineOS Terminal Help: Commands are 'help' and 'clear']";
                 int i = 0;
                 while (reply[i] != '\0') {
@@ -83,28 +84,18 @@ void task_beta_routine() {
                     i++;
                 }
             }
-            else if (mystrcmp(command, "clear") == true) {
-                // Wipe the entire display interface space below our cyan prompt label
+            else if (mystrcmp(local_cmd, "clear") == true) {
                 for (int i = 1600; i < 4000; i = i + 2) {
                     video_memory[i] = ' ';
                     video_memory[i + 1] = 0x07; // Default style reset
                 }
                 cursor_position = 1600;
             }
-
-            // Clean the input buffer safely while interrupts are still locked out
-            clear_shell_command();
-
-            /* Re-enable system interrupts cleanly now that our data operations are locked */
-            asm volatile("sti");
         }
-
 
         for (uint32_t delay = 0; delay < 2000000; delay++) { asm volatile(""); }
     }
 }
-
-
 
 extern "C" void kernel_main() {
     /* Step 1: Initialize the Core System Engine Segments */

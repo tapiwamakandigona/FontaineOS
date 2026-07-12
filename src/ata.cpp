@@ -16,9 +16,21 @@ inline uint8_t inb(uint16_t port) {
    Pulls 256 words (512 bytes) from the hard disk data bus buffer
    and streams them straight into your memory pointer layout.
 */
+/*
+   Fast Word Streaming Assembler Line.
+   Fixed: Enforces explicit register operand tracking constraints
+   so the stack pointer address is forcefully loaded into EDI.
+*/
 inline void insw(uint16_t port, void* addr, uint32_t count) {
-    asm volatile ("cld; rep insw" : "+D"(addr), "+c"(count) : "d"(port) : "memory");
+    asm volatile (
+        "cld\n\t"
+        "rep insw"
+        : "+D"(addr), "+c"(count)
+        : "d"(port)
+        : "memory"
+    );
 }
+
 
 /*
    Waits until the motherboard hard disk controller clears its Busy bit (BSY)

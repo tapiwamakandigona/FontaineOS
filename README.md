@@ -33,6 +33,7 @@ FontaineOS is an advanced, bare-metal x86 micro-kernel operating system built en
 
 ### 💾 Phase 5: Storage Architecture & Shell Workstation (Built Beyond Original Roadmap)
 * **[x] Atomic Interrupt-Level Parser Shell:** Pulls the interactive prompt processing out of loose user loops and mounts it entirely inside the hardware interrupt ring [x].
+* **[x] System Diagnostics Commands:** `uptime` reports wall time straight off the 100Hz PIT tick counter, and `meminfo` walks the PMM allocation bitmap live to report used/free physical pages plus the active scheduler thread count [x].
 * **[x] ATA/IDE Hard Drive Block Driver:** Communicates directly with motherboard disk ports (`0x1F0`–`0x1F7`) using 28-bit Logical Block Addressing (LBA) [x].
 * **[x] Specialized Read/Write Hardware Wait Synchronization:** Solves x86 deadlock traps by implementing separate, dedicated synchronization loops: `ata_wait_read()` (polling BSY + DRQ) and `ata_wait_write()` (polling BSY exclusively) [x].
 * **[x] Flat Global I/O Landing Pads:** Completely eliminates stack alignment drift under high-level compiler optimizations by routing block bursts into static, 4-byte aligned global memory arrays (`ata_io_buffer`, `disk_test_pad`) [x].

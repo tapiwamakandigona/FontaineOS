@@ -10,8 +10,8 @@ LDFLAGS = -m elf_i386 -T linker.ld
 
 all: bin/fontaineos.bin
 
-bin/fontaineos.bin: src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o
-	$(LD) $(LDFLAGS) -o bin/fontaineos.bin src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o
+bin/fontaineos.bin: src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o src/pmm.o
+	$(LD) $(LDFLAGS) -o bin/fontaineos.bin src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o src/pmm.o
 
 src/boot.o: src/boot.s
 	$(AS) $(ASFLAGS) src/boot.s -o src/boot.o
@@ -30,6 +30,9 @@ src/timer.o: src/timer.cpp
 
 src/keyboard.o: src/keyboard.cpp
 	$(CC) $(CFLAGS) src/keyboard.cpp -o src/keyboard.o
+
+src/pmm.o: src/pmm.cpp
+	$(CC) $(CFLAGS) src/pmm.cpp -o src/pmm.o
 
 run: bin/fontaineos.bin
 	qemu-system-i386 -kernel bin/fontaineos.bin

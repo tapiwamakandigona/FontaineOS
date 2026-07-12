@@ -65,15 +65,25 @@ void task_beta_routine() {
                Direct pointer byte comparison.
                Bypasses compiler optimization layers completely.
             */
-            if (mystrcmp(command, "help")) {
+            if (mystrcmp(command, "help") == true) {
                 const char* reply = ">> [FontaineOS Terminal Help: Commands are 'help' and 'clear']";
                 int i = 0;
                 while (reply[i] != '\0') {
-                    video_memory[1760 + (i * 2)] = reply[i]; // Print on row 11
+                    video_memory[1760 + (i * 2)] = reply[i]; // Print on Row 11
                     video_memory[1760 + (i * 2) + 1] = 0x0D; // Purple output style
                     i++;
                 }
             }
+            else if (mystrcmp(command, "clear") == true) {
+                // Clear out the bottom half rows of our display grid frame arrays
+                for (int i = 1600; i < 4000; i = i + 2) {
+                    video_memory[i] = ' ';
+                    video_memory[i + 1] = 0x07;
+                }
+                // Snap our hardware text layout printing tracker back to the start of Row 10
+                cursor_position = 1600;
+            }
+
             // Check command target index: Custom 'clear' command match routing
             else if (mystrcmp(command, "clear")) {
                 // Clear out the bottom half rows of our display grid frame arrays

@@ -14,7 +14,7 @@ FontaineOS is a lightweight, bare-metal x86 micro-kernel operating system built 
 - [x] Phase D: Hardware Keyboard Interrupt Line Parsing & Scancode Map Buffering
 - [x] Phase E: Physical Memory Manager Layer & Bitmap-Driven Page Allocator Core
 - [x] Phase F: Virtual Memory Paging Systems & Basic Kernel Space Protection Matrices
-- [ ] Phase G: Kernel Heap Manager Matrix Support (`kmalloc` and `kfree` Implementation)
+- [x] Phase G: Kernel Heap Manager Matrix Support (`kmalloc` and `kfree` Implementation)
 - [ ] Phase H: Multitasking Architecture Layout & Cooperative Thread Control Blocks
 
 ## 🛠 Required Build Stack

@@ -21,6 +21,19 @@ inline void insw(uint16_t port, void* addr, uint32_t count) {
 static uint8_t ata_io_buffer[512] __attribute__((aligned(4)));
 
 /*
+   Gate off the drive's hardware interrupt line (nIEN = 1).
+
+   This driver is a pure polling driver, but by default the drive still raises
+   IRQ 14 every time a command completes. Our IDT configures gates 0, 32 and 33
+   only, so that stray IRQ 14 vector lands on an empty (non-present) descriptor,
+   the CPU faults while faulting, and the machine triple-faults and reboots.
+   That is exactly what happened whenever the shell ran 'disktest'.
+*/
+static void ata_disable_irq() {
+    outb(ATA_DEV_CTRL, ATA_CTRL_NIEN);
+}
+
+/*
    Dedicated Read Wait.
    Waits until the drive stops being busy AND flags that read data is ready on the bus pins.
 */
@@ -45,6 +58,7 @@ static void ata_wait_write() {
 }
 
 extern "C" void ata_read_sector(uint32_t lba, uint8_t* buffer) {
+    ata_disable_irq();
     outb(ATA_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
     outb(ATA_FEATURES, 0x00);
     outb(ATA_SECTOR_CNT, 0x01);
@@ -81,6 +95,7 @@ extern "C" void ata_write_sector(uint32_t lba, const uint8_t* buffer) {
         ata_io_buffer[i] = buffer[i];
     }
 
+    ata_disable_irq();
     outb(ATA_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
     outb(ATA_SECTOR_CNT, 0x01);
     outb(ATA_LBA_LOW,  (uint8_t)(lba & 0xFF));
@@ -89,6 +104,13 @@ extern "C" void ata_write_sector(uint32_t lba, const uint8_t* buffer) {
 
     // Send the write token command
     outb(ATA_COMMAND, ATA_CMD_WRITE);
+
+    /*
+       Wait for the drive to enter its data-request phase (BSY clear, DRQ set)
+       before streaming words onto the bus. Blasting data while BSY is still
+       high works by luck on some emulators but corrupts writes on real drives.
+    */
+    ata_wait_read();
 
     // Feed the data words onto the bus pins immediately to unblock the controller cache
     outsw(ATA_DATA, ata_io_buffer, 256);

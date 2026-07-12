@@ -17,4 +17,8 @@ void init_pmm(uint32_t memory_size_bytes);
 void* pmm_alloc_page();
 void pmm_free_page(void* paddr);
 
+/* Diagnostics counters powering the shell's 'meminfo' command */
+uint32_t pmm_get_total_pages();
+uint32_t pmm_get_used_pages();
+
 #endif

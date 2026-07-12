@@ -16,10 +16,14 @@
 #define ATA_DRIVE_HEAD  0x1F6
 #define ATA_COMMAND     0x1F7
 #define ATA_STATUS      0x1F7
+#define ATA_DEV_CTRL    0x3F6  // Device Control Register (interrupt gating / soft reset)
 
 /* ATA Controller Status Bit Flags */
 #define ATA_STATUS_BSY  0x80  // Controller is Busy
 #define ATA_STATUS_DRQ  0x08  // Data Request Ready
+
+/* Device Control Register Bit Flags */
+#define ATA_CTRL_NIEN   0x02  // "not Interrupt ENabled": suppress drive IRQ line assertions
 
 /* ATA Command Tokens */
 #define ATA_CMD_READ    0x20  // Read sectors with retry flags active

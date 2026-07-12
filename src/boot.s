@@ -14,6 +14,7 @@ global _start
 global isr0_handler_stub
 global irq0_handler_stub
 global irq1_handler_stub ; Expose our brand new keyboard interrupt gate stub label
+global context_switch    ; Expose our raw scheduler stack-swapping engine
 
 extern kernel_main
 extern divide_by_zero_handler
@@ -53,6 +54,24 @@ irq1_handler_stub:
     call keyboard_handler    ; Jump straight into our live parsing C++ driver block
     popa                     ; Restores register configurations cleanly
     iret                     ; Special return command explicitly pops instruction pointer matrices
+
+; ------------------------------------------------------------------
+; The Context Switch Engine: context_switch(uint32_t* old_esp_slot, uint32_t new_esp)
+;
+; Implemented as a raw assembly routine (instead of inline asm inside C++)
+; so the compiler cannot inject its own prologue/epilogue stack traffic
+; around our carefully fabricated register frames.
+;
+; On entry the stack holds: [esp] return address, [esp+4] old_esp_slot, [esp+8] new_esp
+; ------------------------------------------------------------------
+context_switch:
+    mov eax, [esp + 4]   ; eax = pointer to the outgoing task's saved-esp slot
+    mov edx, [esp + 8]   ; edx = the incoming task's parked stack pointer
+    pusha                ; Save all 8 general-purpose registers (32 bytes) of the outgoing task
+    mov [eax], esp       ; Park the outgoing task's stack pointer inside its control block
+    mov esp, edx         ; Mount the incoming task's stack
+    popa                 ; Restore the incoming task's 8 general-purpose registers
+    ret                  ; Resume the incoming task (or enter thread_bootstrap on first run)
 
 section .bss
 align 16

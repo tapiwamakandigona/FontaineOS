@@ -19,6 +19,7 @@ struct cpu_registers {
 struct thread_control_block {
     uint32_t             id;             // Unique identification number for the thread task
     uint32_t             esp;            // Track the current top address location of this thread's private stack
+    void                 (*entry)();     // The C++ routine this thread executes once it first wakes up
     struct cpu_registers regs;           // Saved snapshot of the processor execution registers
     struct thread_control_block* next;   // Link mapping to the next task in our round-robin execution loop
 };
@@ -29,5 +30,6 @@ struct thread_control_block {
 void init_multitasking();
 void create_thread(void (*thread_entry_function)());
 void switch_task();
+uint32_t get_thread_count();
 
 #endif

@@ -86,3 +86,23 @@ void pmm_free_page(void* paddr) {
     uint32_t page_index = physical_address / PAGE_SIZE;
     bitmap_clear(page_index);
 }
+
+/*
+   Reports the total number of physical page frames tracked by the allocator.
+*/
+uint32_t pmm_get_total_pages() {
+    return total_pages;
+}
+
+/*
+   Walks the allocation bitmap and counts every page currently marked as reserved.
+*/
+uint32_t pmm_get_used_pages() {
+    uint32_t used = 0;
+    for (uint32_t i = 0; i < total_pages; i++) {
+        if (bitmap_test(i)) {
+            used = used + 1;
+        }
+    }
+    return used;
+}

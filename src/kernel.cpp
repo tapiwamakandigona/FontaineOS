@@ -38,7 +38,10 @@ void task_alpha_routine() {
         video_memory[430] = state_char;
         video_memory[431] = 0x0A; // Light Green style ticker
 
-        for (uint32_t delay = 0; delay < 10000000; delay++) { asm volatile(""); }
+        for (uint32_t delay = 0; delay < 1000000; delay++) { asm volatile(""); }
+
+        // Cooperatively hand the CPU over to the next task in the ring
+        switch_task();
     }
 }
 
@@ -55,7 +58,22 @@ void task_beta_routine() {
         video_memory[590] = state_char;
         video_memory[591] = 0x0D; // Light Purple style ticker
 
-        for (uint32_t delay = 0; delay < 10000000; delay++) { asm volatile(""); }
+        for (uint32_t delay = 0; delay < 1000000; delay++) { asm volatile(""); }
+
+        // Cooperatively hand the CPU over to the next task in the ring
+        switch_task();
+    }
+}
+
+/*
+   Wipe every character cell so leftover firmware text (SeaBIOS banners,
+   'Booting from ROM...' residue) cannot linger behind our own console output.
+*/
+static void clear_screen() {
+    volatile char* video_memory = (volatile char*)0xB8000;
+    for (int i = 0; i < 4000; i = i + 2) {
+        video_memory[i] = ' ';
+        video_memory[i + 1] = 0x07; // Standard gray-on-black attribute
     }
 }
 
@@ -77,6 +95,9 @@ extern "C" void kernel_main() {
     /* Step 3: Spawn our parallel runtime threads */
     create_thread(task_alpha_routine);
     create_thread(task_beta_routine);
+
+    /* Start from a pristine screen so firmware boot text cannot bleed into our console */
+    clear_screen();
 
     /* Render Baseline Screen Texts ONCE before loops execute to eliminate memory drift */
     volatile char* video_memory = (volatile char*)0xB8000;
@@ -117,7 +138,15 @@ extern "C" void kernel_main() {
     /* Step 4: Enable Hardware Interrupts globally */
     asm volatile("sti");
 
+    /*
+       Step 5: Drive the cooperative round-robin scheduler.
+       Every pass hands the CPU to the next task in the ring (Alpha, then Beta),
+       and once the ring rotates back here we sleep until the next hardware
+       interrupt instead of burning cycles. Without this call chain the spawned
+       threads would sit parked on their private stacks forever.
+    */
     while (true) {
+        switch_task();
         asm volatile("hlt");
     }
 }

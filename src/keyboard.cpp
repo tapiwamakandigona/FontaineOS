@@ -1,5 +1,7 @@
 #include "keyboard.h"
 #include "timer.h"
+#include "pmm.h"
+#include "task.h"
 
 /*
    A lightweight, bare-metal string comparison utility.
@@ -85,6 +87,57 @@ static void scroll_screen() {
     }
 }
 
+/*
+   Prints a full reply line onto the console at the live cursor position,
+   then drops the cursor onto a fresh row and scrolls if we ran off the screen.
+   Centralizes the copy/paste print loops the command handlers used to repeat.
+*/
+static void shell_print_line(const char* text, uint8_t color) {
+    volatile char* video_memory = (volatile char*)0xB8000;
+    int i = 0;
+    while (text[i] != '\0') {
+        video_memory[cursor_position] = text[i];
+        video_memory[cursor_position + 1] = color;
+        cursor_position = cursor_position + 2;
+        i++;
+    }
+    cursor_position = ((cursor_position / 160) + 1) * 160;
+    scroll_screen();
+}
+
+/*
+   Renders a 32-bit unsigned number into a caller-supplied character buffer
+   (base 10). Freestanding kernels have no sprintf, so we roll our own.
+*/
+static int uint_to_dec(uint32_t value, char* out) {
+    char scratch[10];
+    int len = 0;
+    do {
+        scratch[len] = (char)('0' + (value % 10));
+        value = value / 10;
+        len++;
+    } while (value > 0);
+    for (int i = 0; i < len; i++) {
+        out[i] = scratch[len - 1 - i];
+    }
+    out[len] = '\0';
+    return len;
+}
+
+/*
+   Tiny bounded string appender used to compose diagnostic reply lines.
+*/
+static int append_str(char* dest, int pos, const char* src) {
+    int i = 0;
+    while (src[i] != '\0' && pos < 159) {
+        dest[pos] = src[i];
+        pos++;
+        i++;
+    }
+    dest[pos] = '\0';
+    return pos;
+}
+
 extern "C" void keyboard_handler() {
     uint8_t scancode = inb(0x60);
 
@@ -111,16 +164,43 @@ extern "C" void keyboard_handler() {
         bool command_processed = false;
 
         if (mystrcmp(cmd_buffer, "help") == true) {
-            const char* reply = ">> [FontaineOS Help: Commands are 'help', 'clear', and 'disktest']";
-            int i = 0;
-            while (reply[i] != '\0') {
-                video_memory[cursor_position] = reply[i];
-                video_memory[cursor_position + 1] = 0x0D; // Purple style font
-                cursor_position = cursor_position + 2;
-                i++;
-            }
-            cursor_position = ((cursor_position / 160) + 1) * 160;
-            scroll_screen();
+            shell_print_line(">> [FontaineOS Help: 'help', 'clear', 'uptime', 'meminfo', 'disktest']", 0x0D);
+            command_processed = true;
+        }
+        else if (mystrcmp(cmd_buffer, "uptime") == true) {
+            /* Convert raw PIT pulses into whole seconds (the clock ticks at TIMER_HZ) */
+            uint32_t ticks = timer_ticks;
+            char reply[160];
+            char num[11];
+            int pos = append_str(reply, 0, ">> Uptime: ");
+            uint_to_dec(ticks / TIMER_HZ, num);
+            pos = append_str(reply, pos, num);
+            pos = append_str(reply, pos, " seconds (");
+            uint_to_dec(ticks, num);
+            pos = append_str(reply, pos, num);
+            pos = append_str(reply, pos, " hardware ticks @ 100Hz)");
+            shell_print_line(reply, 0x0B);
+            command_processed = true;
+        }
+        else if (mystrcmp(cmd_buffer, "meminfo") == true) {
+            uint32_t total = pmm_get_total_pages();
+            uint32_t used  = pmm_get_used_pages();
+            uint32_t free_kb = (total - used) * (PAGE_SIZE / 1024);
+            char reply[160];
+            char num[11];
+            int pos = append_str(reply, 0, ">> Memory: ");
+            uint_to_dec(used, num);
+            pos = append_str(reply, pos, num);
+            pos = append_str(reply, pos, "/");
+            uint_to_dec(total, num);
+            pos = append_str(reply, pos, num);
+            pos = append_str(reply, pos, " pages used | ");
+            uint_to_dec(free_kb, num);
+            pos = append_str(reply, pos, num);
+            pos = append_str(reply, pos, " KB free | Threads: ");
+            uint_to_dec(get_thread_count(), num);
+            pos = append_str(reply, pos, num);
+            shell_print_line(reply, 0x0B);
             command_processed = true;
         }
         else if (mystrcmp(cmd_buffer, "clear") == true) {
@@ -167,16 +247,7 @@ extern "C" void keyboard_handler() {
         }
         /* Fixed: Explicitly verify character element index slot 0 to avoid pointer comparison leaks */
         else if (command_processed == false && cmd_buffer[0] != '\0') {
-            const char* error_reply = ">> Command not found! Type 'help' for options.";
-            int i = 0;
-            while (error_reply[i] != '\0') {
-                video_memory[cursor_position] = error_reply[i];
-                video_memory[cursor_position + 1] = 0x0D; // Purple style font
-                cursor_position = cursor_position + 2;
-                i++;
-            }
-            cursor_position = ((cursor_position / 160) + 1) * 160;
-            scroll_screen();
+            shell_print_line(">> Command not found! Type 'help' for options.", 0x0D);
         }
 
         clear_shell_command();

@@ -19,4 +19,13 @@ extern "C" {
     void timer_handler();
 }
 
+/*
+   The global hardware clock pulse counter maintained by timer_handler().
+   Exposed here so diagnostics (like the shell's 'uptime' command) can read it.
+*/
+extern volatile uint32_t timer_ticks;
+
+/* The configured PIT frequency: 100 ticks equals exactly one second of wall time. */
+#define TIMER_HZ 100
+
 #endif

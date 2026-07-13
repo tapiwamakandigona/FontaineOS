@@ -20,6 +20,25 @@ make all
 Re-running is safe; downloaded packages are cached. On a machine with root,
 skip this and just `apt-get install nasm qemu-system-x86`.
 
+## fontfs_inject.py — host-side FontFS file injector
+
+Writes files (typically the user programs built by `make userprogs`) directly
+into `bin/disk.img`, following the exact FontFS on-disk layout implemented by
+`src/fontfs.cpp` / `include/fontfs.h`. This is how `.bin` programs get onto
+the disk: the shell's `write` command can only take keyboard text.
+
+```sh
+make all                                                  # builds user/*.bin too
+python3 tools/fontfs_inject.py bin/disk.img user/hello.bin user/count.bin
+python3 tools/fontfs_inject.py --list bin/disk.img        # show the FS directory
+make inject                                               # shorthand for the injection above
+```
+
+Behaviour mirrors the kernel precisely: an image with no valid superblock is
+formatted first (like `fontfs_format()`), re-injecting an existing name
+overwrites it in place (like `fontfs_write()`), and the kernel limits are
+enforced (16 files, 8192 bytes/file, names ≤ 19 chars). Stdlib only.
+
 ## qemu_test.py — headless boot & shell test harness
 
 Boots `bin/fontaineos.bin` under QEMU with no display, types commands into

@@ -6,6 +6,7 @@
 #include "heap.h"
 #include "task.h"
 #include "keyboard.h"
+#include "fontfs.h"
 
 uint32_t count_alpha = 0;
 uint32_t count_beta = 0;
@@ -164,6 +165,25 @@ extern "C" void kernel_main() {
     while (msg_shell[i] != '\0') {
         video_memory[1440 + (i * 2)] = msg_shell[i];
         video_memory[1440 + (i * 2) + 1] = 0x0B; // Light Cyan style on Row 9
+        i++;
+    }
+
+    /*
+       Mount FontFS once at boot. fontfs_mount() reads the superblock (LBA 0)
+       and checks its magic number: a match means a formatted filesystem is
+       already on disk.img and its files are ready to use; a mismatch means the
+       disk has never been formatted. We print a one-line status on row 8 so
+       the boot screen itself is evidence that on-disk detection works — after
+       a 'format' the very next boot flips this line from "no filesystem" to
+       "mounted", proving the superblock persisted.
+    */
+    const char* msg_fs = fontfs_mount()
+        ? "FontFS: mounted (valid filesystem found on disk)"
+        : "FontFS: no filesystem (run 'format')             ";
+    i = 0;
+    while (msg_fs[i] != '\0') {
+        video_memory[1280 + (i * 2)] = msg_fs[i];
+        video_memory[1280 + (i * 2) + 1] = 0x0A; // Light Green style on Row 8
         i++;
     }
 

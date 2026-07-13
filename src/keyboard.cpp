@@ -2,6 +2,7 @@
 #include "timer.h"
 #include "pmm.h"
 #include "task.h"
+#include "fontfs.h"
 
 /*
    A lightweight, bare-metal string comparison utility.
@@ -138,6 +139,56 @@ static int append_str(char* dest, int pos, const char* src) {
     return pos;
 }
 
+/*
+   Shell argument tokenizer.
+
+   The existing shell matched the WHOLE command buffer with mystrcmp, which is
+   fine for word-less commands (help, clear, ...) but useless for the new
+   filesystem verbs that take arguments ('cat hello', 'write hello world').
+   first_token() peels the first whitespace-delimited word off 'src' into
+   'out' (bounded, always NUL-terminated) and returns a pointer to the rest of
+   the line with the separating spaces skipped. Calling it once gives us
+   verb + argument-tail; calling it again on the tail gives us
+   filename + text-tail for the 'write' command.
+*/
+static const char* first_token(const char* src, char* out, int out_max) {
+    int i = 0;
+    while (src[i] == ' ') i++;              // skip any leading spaces
+    int o = 0;
+    while (src[i] != '\0' && src[i] != ' ' && o < out_max - 1) {
+        out[o] = src[i];
+        o++;
+        i++;
+    }
+    out[o] = '\0';
+    while (src[i] == ' ') i++;              // skip spaces before the remainder
+    return &src[i];
+}
+
+/*
+   Static scratch for reading a whole file back before printing it. Kept in the
+   BSS (not on the IRQ stack) and sized one byte over the max file so we can
+   always NUL-terminate before handing it to shell_print_line.
+*/
+static uint8_t fs_file_buf[FONTFS_MAX_FILE_SIZE + 1] __attribute__((aligned(4)));
+
+/* Static name scratch for the argument-taking filesystem commands. */
+static char fs_name_buf[FONTFS_NAME_MAX];
+
+/* fontfs_list() callback: render one "  <name>  (<n> bytes)" line per file. */
+static void fs_ls_cb(const char* name, uint32_t size, void* ctx) {
+    (void)ctx;
+    char reply[160];
+    char num[11];
+    int pos = append_str(reply, 0, "  ");
+    pos = append_str(reply, pos, name);
+    pos = append_str(reply, pos, "  (");
+    uint_to_dec(size, num);
+    pos = append_str(reply, pos, num);
+    pos = append_str(reply, pos, " bytes)");
+    shell_print_line(reply, 0x0F);
+}
+
 extern "C" void keyboard_handler() {
     uint8_t scancode = inb(0x60);
 
@@ -163,8 +214,18 @@ extern "C" void keyboard_handler() {
         // Tracking flag token to isolate command validation loops cleanly
         bool command_processed = false;
 
+        /*
+           Split the raw command buffer into a verb and an argument tail once,
+           up front, so every branch below can use them. Word-less commands
+           (help/clear/...) still match because their verb equals the whole
+           line; the filesystem verbs additionally consume the argument tail.
+        */
+        char verb[16];
+        const char* argtail = first_token(cmd_buffer, verb, (int)sizeof(verb));
+
         if (mystrcmp(cmd_buffer, "help") == true) {
-            shell_print_line(">> [FontaineOS Help: 'help', 'clear', 'uptime', 'meminfo', 'disktest']", 0x0D);
+            shell_print_line(">> [FontaineOS Help: help, clear, uptime, meminfo, disktest]", 0x0D);
+            shell_print_line(">> [FontFS: format, ls, cat <f>, write <f> <text>, touch <f>, rm <f>]", 0x0D);
             command_processed = true;
         }
         else if (mystrcmp(cmd_buffer, "uptime") == true) {
@@ -243,6 +304,110 @@ extern "C" void keyboard_handler() {
             }
             cursor_position = ((cursor_position / 160) + 1) * 160;
             scroll_screen();
+            command_processed = true;
+        }
+        /* ---- FontFS shell commands -------------------------------------- */
+        else if (mystrcmp(verb, "format") == true) {
+            fontfs_format();
+            shell_print_line(">> FontFS: formatted (fresh superblock + empty file table written)", 0x0A);
+            command_processed = true;
+        }
+        else if (mystrcmp(verb, "ls") == true) {
+            if (!fontfs_is_mounted()) {
+                shell_print_line(">> FontFS: no filesystem. Run 'format' first.", 0x0C);
+            } else {
+                int n = fontfs_list(fs_ls_cb, nullptr);
+                if (n == 0) shell_print_line(">> (no files)", 0x07);
+            }
+            command_processed = true;
+        }
+        else if (mystrcmp(verb, "cat") == true) {
+            first_token(argtail, fs_name_buf, (int)sizeof(fs_name_buf));
+            if (fs_name_buf[0] == '\0') {
+                shell_print_line(">> usage: cat <file>", 0x0C);
+            } else {
+                int len = fontfs_read(fs_name_buf, fs_file_buf, FONTFS_MAX_FILE_SIZE);
+                if (len == FONTFS_ERR_NOTFOUND) {
+                    shell_print_line(">> cat: file not found", 0x0C);
+                } else if (len == FONTFS_ERR_NOTMOUNTED) {
+                    shell_print_line(">> FontFS: no filesystem. Run 'format' first.", 0x0C);
+                } else if (len < 0) {
+                    shell_print_line(">> cat: read error", 0x0C);
+                } else {
+                    fs_file_buf[len] = 0; // NUL-terminate for the printer
+                    shell_print_line((const char*)fs_file_buf, 0x0F);
+                }
+            }
+            command_processed = true;
+        }
+        else if (mystrcmp(verb, "write") == true) {
+            /* write <file> <text...> : filename is the next token, the rest of
+               the line (spaces preserved) becomes the file's contents. */
+            const char* text = first_token(argtail, fs_name_buf, (int)sizeof(fs_name_buf));
+            if (fs_name_buf[0] == '\0') {
+                shell_print_line(">> usage: write <file> <text...>", 0x0C);
+            } else {
+                uint32_t tlen = 0;
+                while (text[tlen] != '\0') tlen++;
+                int rc = fontfs_write(fs_name_buf, (const uint8_t*)text, tlen);
+                if (rc == FONTFS_OK) {
+                    char reply[160];
+                    char num[11];
+                    int pos = append_str(reply, 0, ">> wrote ");
+                    uint_to_dec(tlen, num);
+                    pos = append_str(reply, pos, num);
+                    pos = append_str(reply, pos, " bytes to '");
+                    pos = append_str(reply, pos, fs_name_buf);
+                    pos = append_str(reply, pos, "'");
+                    shell_print_line(reply, 0x0A);
+                } else if (rc == FONTFS_ERR_NOTMOUNTED) {
+                    shell_print_line(">> FontFS: no filesystem. Run 'format' first.", 0x0C);
+                } else if (rc == FONTFS_ERR_NOSPACE) {
+                    shell_print_line(">> write: directory full (16 files max)", 0x0C);
+                } else if (rc == FONTFS_ERR_TOOBIG) {
+                    shell_print_line(">> write: text too large (8192 bytes max)", 0x0C);
+                } else {
+                    shell_print_line(">> write: error", 0x0C);
+                }
+            }
+            command_processed = true;
+        }
+        else if (mystrcmp(verb, "touch") == true) {
+            first_token(argtail, fs_name_buf, (int)sizeof(fs_name_buf));
+            if (fs_name_buf[0] == '\0') {
+                shell_print_line(">> usage: touch <file>", 0x0C);
+            } else {
+                int rc = fontfs_create(fs_name_buf);
+                if (rc == FONTFS_OK) {
+                    shell_print_line(">> created empty file", 0x0A);
+                } else if (rc == FONTFS_ERR_EXISTS) {
+                    shell_print_line(">> touch: file already exists", 0x0C);
+                } else if (rc == FONTFS_ERR_NOTMOUNTED) {
+                    shell_print_line(">> FontFS: no filesystem. Run 'format' first.", 0x0C);
+                } else if (rc == FONTFS_ERR_NOSPACE) {
+                    shell_print_line(">> touch: directory full (16 files max)", 0x0C);
+                } else {
+                    shell_print_line(">> touch: error", 0x0C);
+                }
+            }
+            command_processed = true;
+        }
+        else if (mystrcmp(verb, "rm") == true) {
+            first_token(argtail, fs_name_buf, (int)sizeof(fs_name_buf));
+            if (fs_name_buf[0] == '\0') {
+                shell_print_line(">> usage: rm <file>", 0x0C);
+            } else {
+                int rc = fontfs_delete(fs_name_buf);
+                if (rc == FONTFS_OK) {
+                    shell_print_line(">> removed", 0x0A);
+                } else if (rc == FONTFS_ERR_NOTFOUND) {
+                    shell_print_line(">> rm: file not found", 0x0C);
+                } else if (rc == FONTFS_ERR_NOTMOUNTED) {
+                    shell_print_line(">> FontFS: no filesystem. Run 'format' first.", 0x0C);
+                } else {
+                    shell_print_line(">> rm: error", 0x0C);
+                }
+            }
             command_processed = true;
         }
         /* Fixed: Explicitly verify character element index slot 0 to avoid pointer comparison leaks */

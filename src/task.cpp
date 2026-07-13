@@ -1,5 +1,6 @@
 #include "task.h"
 #include "heap.h"
+#include "timer.h"   // for timer_ticks — sleep()/wake bookkeeping is driven off the PIT clock
 
 /*
    The raw assembly context switching engine living inside boot.s.
@@ -24,6 +25,13 @@ void init_multitasking() {
     kernel_task->id = 0;
     kernel_task->esp = 0; // The main kernel already uses our primary 16KB system stack pool
     kernel_task->entry = nullptr;
+    /*
+       Task 0 (the kernel/idle timeline) is the task currently on the CPU and it
+       NEVER sleeps. Keeping it permanently runnable is our guard against the
+       "everyone is asleep" deadlock: the scheduler can always fall back to it.
+    */
+    kernel_task->state = THREAD_RUNNING;
+    kernel_task->wake_tick = 0;
     kernel_task->next = kernel_task; // Initially loop back into itself
 
     running_task = kernel_task;
@@ -64,6 +72,10 @@ void create_thread(void (*thread_entry_function)()) {
     new_thread->id = next_thread_id;
     next_thread_id = next_thread_id + 1;
     new_thread->entry = thread_entry_function;
+
+    // A freshly fabricated thread is immediately eligible to run.
+    new_thread->state = THREAD_READY;
+    new_thread->wake_tick = 0;
 
     /*
        Fabricate the exact stack image 'context_switch' expects to find:
@@ -106,9 +118,73 @@ uint32_t get_thread_count() {
 }
 
 /*
-   The Cooperative Scheduler Context Switcher.
-   Saves the active register traces on the current stack, swaps the stack pointer variables,
-   and wakes up the next linked target thread line.
+   Pick the next runnable task in round-robin order, starting just after 'from'
+   and wrapping once around the whole ring (so 'from' itself is considered last).
+
+   Along the way any SLEEPING task whose alarm has fired (wake_tick <= timer_ticks)
+   is promoted back to READY — this is where sleeping tasks re-enter the schedule.
+   Returns the first READY/RUNNING task found, or nullptr if literally everyone is
+   asleep (which cannot happen in practice because task 0 never sleeps).
+*/
+static struct thread_control_block* pick_next_runnable(struct thread_control_block* from) {
+    struct thread_control_block* node = from->next;
+    uint32_t ring_size = get_thread_count();
+
+    for (uint32_t scanned = 0; scanned < ring_size; scanned++) {
+        // Fire any expired sleep alarm before deciding on eligibility.
+        if (node->state == THREAD_SLEEPING && node->wake_tick <= timer_ticks) {
+            node->state = THREAD_READY;
+        }
+        if (node->state != THREAD_SLEEPING) {
+            return node; // first task that is READY or RUNNING wins this round
+        }
+        node = node->next;
+    }
+    return nullptr; // everyone asleep — see task 0 guard in init_multitasking()
+}
+
+/*
+   The shared low-level switch core used by BOTH the cooperative path
+   (switch_task/sleep) and the preemptive IRQ path (schedule).
+
+   IMPORTANT: this routine deliberately does NOT touch the interrupt flag. Its
+   callers own the IF policy, because the two paths differ:
+     - cooperative callers wrap it in cli/sti;
+     - the IRQ path runs with interrupts already masked and lets the eventual
+       'iret' restore IF — re-enabling interrupts here would allow a nested timer
+       IRQ (EOI is already sent) to re-enter and corrupt the stacks.
+
+   We only demote the outgoing task RUNNING->READY. A task that has already marked
+   itself SLEEPING (via sleep()) must keep that state, so we leave non-RUNNING
+   states untouched.
+*/
+static void switch_into(struct thread_control_block* next_task) {
+    struct thread_control_block* old_task = running_task;
+
+    if (old_task->state == THREAD_RUNNING) {
+        old_task->state = THREAD_READY;
+    }
+    next_task->state = THREAD_RUNNING;
+    running_task = next_task;
+
+    /*
+       Hand over to the dedicated assembly routine in boot.s. Doing the pusha/popa
+       dance inside a plain C++ function body is undefined behaviour territory: the
+       compiler is free to wrap the inline asm with its own prologue/epilogue stack
+       traffic, which silently corrupts the fabricated thread frames under -O2.
+       A raw assembly function has no compiler-generated frame, so the stack layout
+       is exactly what we built in create_thread(). Because every task enters and
+       leaves through this SAME routine, cooperative and preemptive frames stay
+       perfectly symmetric.
+    */
+    context_switch(&old_task->esp, next_task->esp);
+}
+
+/*
+   The Cooperative Scheduler Context Switcher (still used by thread_bootstrap's
+   fall-off guard and available to any code that wants to yield explicitly).
+   Runs from ordinary task context, so it masks interrupts around the swap and
+   re-enables them once it is switched back in.
 */
 void switch_task() {
     if (running_task == nullptr || running_task->next == running_task) return;
@@ -119,21 +195,62 @@ void switch_task() {
     */
     asm volatile("cli");
 
-    struct thread_control_block* old_task = running_task;
-    struct thread_control_block* next_task = running_task->next;
-
-    running_task = next_task;
-
-    /*
-       Hand over to the dedicated assembly routine in boot.s. Doing the pusha/popa
-       dance inside a plain C++ function body is undefined behaviour territory: the
-       compiler is free to wrap the inline asm with its own prologue/epilogue stack
-       traffic, which silently corrupts the fabricated thread frames under -O2.
-       A raw assembly function has no compiler-generated frame, so the stack layout
-       is exactly what we built in create_thread().
-    */
-    context_switch(&old_task->esp, next_task->esp);
+    struct thread_control_block* next_task = pick_next_runnable(running_task);
+    if (next_task != nullptr && next_task != running_task) {
+        switch_into(next_task);
+    }
 
     // We only get back here once another task switches into us again
+    asm volatile("sti");
+}
+
+/*
+   The PREEMPTIVE scheduler, invoked from inside the timer IRQ (see timer_handler).
+   This is what makes multitasking preemptive: no task has to yield — the PIT tick
+   forcibly rotates the CPU to the next runnable task.
+
+   RE-ENTRANCY CONTRACT (get this wrong and you triple-fault):
+     * We are already inside IRQ0 with IF=0, so we must NOT execute sti/cli here.
+       The task we switch AWAY from resumes later back through timer_handler ->
+       popa -> iret, and it is that iret which restores its saved EFLAGS (IF=1).
+     * The PIC EOI has ALREADY been sent by timer_handler before calling us, so
+       tasks we switch to still keep receiving timer ticks. We do not re-send it.
+     * Because IF stays 0 across the whole switch, no nested timer IRQ can fire
+       mid-swap even though the EOI is out — the stacks cannot be re-entered.
+*/
+extern "C" void schedule() {
+    if (running_task == nullptr || running_task->next == running_task) return;
+
+    struct thread_control_block* next_task = pick_next_runnable(running_task);
+    if (next_task != nullptr && next_task != running_task) {
+        switch_into(next_task);
+    }
+}
+
+/*
+   The sleep(ticks) primitive. Parks the calling task for 'ticks' PIT ticks
+   (100 ticks = 1 second at 100 Hz), then reschedules so a runnable task runs in
+   its place. The task resumes here only once the scheduler wakes it — i.e. once
+   timer_ticks has advanced past wake_tick and pick_next_runnable promotes it back
+   to READY, then some later switch mounts it again.
+
+   Runs from ordinary task context (not the IRQ), so like switch_task it fences the
+   swap with cli/sti. Note switch_into() will NOT clobber our SLEEPING state because
+   it only demotes tasks that are still RUNNING.
+*/
+void sleep(uint32_t ticks) {
+    if (running_task == nullptr) return;
+
+    asm volatile("cli");
+
+    running_task->wake_tick = timer_ticks + ticks;
+    running_task->state = THREAD_SLEEPING;
+
+    struct thread_control_block* next_task = pick_next_runnable(running_task);
+    if (next_task != nullptr && next_task != running_task) {
+        switch_into(next_task);
+    }
+
+    // Control returns here after we are woken and re-scheduled onto the CPU.
     asm volatile("sti");
 }

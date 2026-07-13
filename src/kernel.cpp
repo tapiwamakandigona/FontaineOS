@@ -9,6 +9,7 @@
 
 uint32_t count_alpha = 0;
 uint32_t count_beta = 0;
+uint32_t count_gamma = 0;
 
 /*
    A lightweight, bare-metal string comparison utility.
@@ -27,7 +28,10 @@ bool mystrcmp(const char* str1, const char* str2) {
 
 /*
    Thread Task Alpha.
-   Runs concurrently on its own private stack and prints system cycle counts on row 3.
+   A PURE CPU-bound loop: it spins forever incrementing its counter and repainting
+   its ticker on row 3. Note there is NO switch_task()/yield anywhere in its body —
+   it never voluntarily gives up the CPU. The fact that its ticker keeps advancing
+   in lock-step with Task Beta's is the proof that the timer IRQ is preempting it.
 */
 void task_alpha_routine() {
     volatile char* video_memory = (volatile char*)0xB8000;
@@ -39,15 +43,15 @@ void task_alpha_routine() {
         video_memory[431] = 0x0A; // Light Green style ticker
 
         for (uint32_t delay = 0; delay < 1000000; delay++) { asm volatile(""); }
-
-        // Cooperatively hand the CPU over to the next task in the ring
-        switch_task();
     }
 }
 
 /*
    Thread Task Beta.
-   Runs concurrently alongside Task Alpha and updates its own separate status ticker on row 4!
+   Also a PURE CPU-bound loop with NO cooperative yield, updating its own ticker on
+   row 4. Under the old cooperative scheduler removing switch_task() here would have
+   frozen Alpha forever; under preemption both tickers advance because the PIT tick
+   rotates the CPU between them automatically.
 */
 void task_beta_routine() {
     volatile char* video_memory = (volatile char*)0xB8000;
@@ -59,9 +63,28 @@ void task_beta_routine() {
         video_memory[591] = 0x0D; // Light Purple style ticker
 
         for (uint32_t delay = 0; delay < 1000000; delay++) { asm volatile(""); }
+    }
+}
 
-        // Cooperatively hand the CPU over to the next task in the ring
-        switch_task();
+/*
+   Thread Task Gamma — the sleep() demonstrator.
+   Unlike Alpha and Beta this task is NOT CPU-bound: after each tick of its counter
+   it calls sleep(TIMER_HZ), parking itself for one full second. The scheduler skips
+   it entirely while it sleeps and only wakes it once the PIT has advanced 100 ticks.
+   Visually its ticker on row 5 crawls forward roughly once per second while Alpha's
+   and Beta's race ahead — that difference is the visible proof that sleep() works.
+*/
+void task_gamma_routine() {
+    volatile char* video_memory = (volatile char*)0xB8000;
+    while (true) {
+        count_gamma = count_gamma + 1;
+        char state_char = '0' + (count_gamma % 10);
+
+        video_memory[750] = state_char;
+        video_memory[751] = 0x0E; // Gold style ticker
+
+        // Park for exactly one second (100 ticks at 100 Hz), then loop.
+        sleep(TIMER_HZ);
     }
 }
 
@@ -95,6 +118,7 @@ extern "C" void kernel_main() {
     /* Step 3: Spawn our parallel runtime threads */
     create_thread(task_alpha_routine);
     create_thread(task_beta_routine);
+    create_thread(task_gamma_routine); // the sleep() demonstrator (row 5)
 
     /* Start from a pristine screen so firmware boot text cannot bleed into our console */
     clear_screen();
@@ -102,9 +126,10 @@ extern "C" void kernel_main() {
     /* Render Baseline Screen Texts ONCE before loops execute to eliminate memory drift */
     volatile char* video_memory = (volatile char*)0xB8000;
 
-    const char* msg_master = "FontaineOS Architecture Complete! Task Scheduler Loops Active.";
-    const char* msg_alpha  = "[Task Alpha Running Concurrently] Cycle State Ticking: ";
-    const char* msg_beta   = "[Task Beta Running Concurrently] Cycle State Ticking:  ";
+    const char* msg_master = "FontaineOS Architecture Complete! Preemptive Scheduler Active.";
+    const char* msg_alpha  = "[Task Alpha CPU-bound, no yield] Cycle State Ticking: ";
+    const char* msg_beta   = "[Task Beta CPU-bound, no yield]  Cycle State Ticking:  ";
+    const char* msg_gamma  = "[Task Gamma sleeping 1s each loop] Slow Ticker:        ";
     const char* msg_shell  = "FontaineOS Console Interface Live. Type 'help' or 'clear':";
 
     int i = 0;
@@ -129,6 +154,13 @@ extern "C" void kernel_main() {
     }
 
     i = 0;
+    while (msg_gamma[i] != '\0') {
+        video_memory[640 + (i * 2)] = msg_gamma[i];
+        video_memory[640 + (i * 2) + 1] = 0x0E; // Gold style on Row 5
+        i++;
+    }
+
+    i = 0;
     while (msg_shell[i] != '\0') {
         video_memory[1440 + (i * 2)] = msg_shell[i];
         video_memory[1440 + (i * 2) + 1] = 0x0B; // Light Cyan style on Row 9
@@ -139,14 +171,16 @@ extern "C" void kernel_main() {
     asm volatile("sti");
 
     /*
-       Step 5: Drive the cooperative round-robin scheduler.
-       Every pass hands the CPU to the next task in the ring (Alpha, then Beta),
-       and once the ring rotates back here we sleep until the next hardware
-       interrupt instead of burning cycles. Without this call chain the spawned
-       threads would sit parked on their private stacks forever.
+       Step 5: Become the idle task.
+       With preemption in force the kernel no longer has to hand the CPU around by
+       hand — the timer IRQ (see timer_handler -> schedule) rotates between tasks on
+       its own. Task 0 simply parks on 'hlt' until the next interrupt; when the PIT
+       fires, schedule() preempts us and runs a real task, and we are switched back
+       here later only to hlt again. Because task 0 never sleeps it doubles as the
+       scheduler's always-runnable fallback, so the ring can never deadlock even if
+       every other task is asleep.
     */
     while (true) {
-        switch_task();
         asm volatile("hlt");
     }
 }

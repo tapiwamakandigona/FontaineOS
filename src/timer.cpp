@@ -1,8 +1,18 @@
 #include "timer.h"
 #include "idt.h"
+#include "task.h"   // schedule() — the preemptive scheduler we drive from this IRQ
 
 // Track the total number of hardware clock pulses since the kernel booted
 volatile uint32_t timer_ticks = 0;
+
+/*
+   Preemption quantum, in PIT ticks. We only reschedule every SCHEDULE_QUANTUM
+   ticks rather than on literally every tick. At 100 Hz a quantum of 1 already
+   means a 10 ms time-slice, which is plenty fine-grained for a demo kernel and
+   keeps the on-screen tickers visibly advancing instead of thrashing. Bump this
+   constant to hand each task a longer slice.
+*/
+#define SCHEDULE_QUANTUM 1
 
 /*
    Remaps the Programmable Interrupt Controller (PIC).
@@ -71,6 +81,30 @@ extern "C" void timer_handler() {
     /*
        End of Interrupt (EOI). We MUST send a 0x20 command confirmation byte to the
        PIC port, otherwise the motherboard will freeze and refuse to fire any more clock ticks.
+
+       Crucially we send the EOI *before* the context switch below. If we switched
+       away first, the outgoing task's saved frame would resume with the PIC still
+       waiting for its acknowledgement and no further timer ticks would ever arrive
+       for any task. Acknowledge now, switch after.
     */
     outb(0x20, 0x20);
+
+    /*
+       PREEMPTION: drive the scheduler straight from the timer IRQ. This is what
+       turns cooperative multitasking into preemptive multitasking — no task has to
+       call switch_task()/yield; the PIT tick forcibly rotates the CPU.
+
+       We are running inside IRQ0 with IF=0. schedule() deliberately performs its
+       stack swap WITHOUT re-enabling interrupts: doing an sti here (before the
+       iret in irq0_handler_stub) would let a nested timer IRQ re-enter and corrupt
+       the stacks even though the EOI is already out. The eventual 'iret' restores
+       the resumed task's saved EFLAGS (and thus its IF) for us.
+
+       When schedule() switches away, this timer_handler invocation is frozen on the
+       outgoing task's stack; it thaws and returns normally the next time that task
+       is scheduled back in, unwinding through popa -> iret.
+    */
+    if (timer_ticks % SCHEDULE_QUANTUM == 0) {
+        schedule();
+    }
 }

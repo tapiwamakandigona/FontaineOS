@@ -7,6 +7,7 @@
 #include "task.h"
 #include "keyboard.h"
 #include "fontfs.h"
+#include "syscall.h"
 
 uint32_t count_alpha = 0;
 uint32_t count_beta = 0;
@@ -120,6 +121,15 @@ extern "C" void kernel_main() {
     create_thread(task_alpha_routine);
     create_thread(task_beta_routine);
     create_thread(task_gamma_routine); // the sleep() demonstrator (row 5)
+
+    /*
+       The RING-3 demonstration launcher (src/syscall.cpp). A normal kernel
+       thread that flips the page permissions, arms the TSS esp0 stack, and
+       drops the CPU to CPL=3 twice: once for the syscall hello (rows 5-6),
+       once to provoke — and cleanly survive — a General Protection Fault
+       (row 7). Scheduled round-robin like every other thread.
+    */
+    create_thread(ring3_demo_task);
 
     /* Start from a pristine screen so firmware boot text cannot bleed into our console */
     clear_screen();

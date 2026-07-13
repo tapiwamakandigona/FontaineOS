@@ -10,8 +10,8 @@ LDFLAGS = -m elf_i386 -T linker.ld
 
 all: bin/fontaineos.bin bin/disk.img
 
-bin/fontaineos.bin: src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o src/pmm.o src/vmm.o src/heap.o src/task.o src/ata.o src/fontfs.o
-	$(LD) $(LDFLAGS) -o bin/fontaineos.bin src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o src/pmm.o src/vmm.o src/heap.o src/task.o src/ata.o src/fontfs.o
+bin/fontaineos.bin: src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o src/pmm.o src/vmm.o src/heap.o src/task.o src/ata.o src/fontfs.o src/syscall.o
+	$(LD) $(LDFLAGS) -o bin/fontaineos.bin src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o src/pmm.o src/vmm.o src/heap.o src/task.o src/ata.o src/fontfs.o src/syscall.o
 
 # Automatically generate a clean 10MB virtual hard drive image if one is missing
 bin/disk.img:
@@ -60,3 +60,6 @@ run: bin/fontaineos.bin bin/disk.img
 
 clean:
 	rm -f src/*.o bin/*.bin bin/disk.img
+
+src/syscall.o: src/syscall.cpp
+	$(CC) $(CFLAGS) src/syscall.cpp -o src/syscall.o

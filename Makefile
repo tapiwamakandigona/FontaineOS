@@ -8,7 +8,25 @@ ASFLAGS = -f elf32
 CFLAGS  = -m32 -c -ffreestanding -O2 -Wall -Wextra -fno-exceptions -fno-rtti -Iinclude -std=c++20
 LDFLAGS = -m elf_i386 -T linker.ld
 
-all: bin/fontaineos.bin bin/disk.img
+all: bin/fontaineos.bin bin/disk.img userprogs
+
+# ---------------------------------------------------------------------------
+# User programs (M4): flat 32-bit binaries assembled with 'nasm -f bin'.
+# Sources live in user/*.asm; the .bin artifacts are build products (not
+# committed). Get them onto the disk with 'make inject' — the shell's 'write'
+# command can only type text, so binaries are injected host-side by
+# tools/fontfs_inject.py following FontFS's exact on-disk layout.
+# ---------------------------------------------------------------------------
+USER_PROGS = user/hello.bin user/count.bin
+
+userprogs: $(USER_PROGS)
+
+user/%.bin: user/%.asm
+	$(AS) -f bin $< -o $@
+
+# Inject the built user programs into the disk image (formats it if virgin).
+inject: bin/disk.img $(USER_PROGS)
+	python3 tools/fontfs_inject.py bin/disk.img $(USER_PROGS)
 
 bin/fontaineos.bin: src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o src/pmm.o src/vmm.o src/heap.o src/task.o src/ata.o src/fontfs.o src/syscall.o
 	$(LD) $(LDFLAGS) -o bin/fontaineos.bin src/boot.o src/kernel.o src/gdt.o src/idt.o src/timer.o src/keyboard.o src/pmm.o src/vmm.o src/heap.o src/task.o src/ata.o src/fontfs.o src/syscall.o
@@ -59,7 +77,7 @@ run: bin/fontaineos.bin bin/disk.img
 
 
 clean:
-	rm -f src/*.o bin/*.bin bin/disk.img
+	rm -f src/*.o bin/*.bin bin/disk.img user/*.bin
 
 src/syscall.o: src/syscall.cpp
 	$(CC) $(CFLAGS) src/syscall.cpp -o src/syscall.o

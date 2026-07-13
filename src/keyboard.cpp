@@ -3,6 +3,7 @@
 #include "pmm.h"
 #include "task.h"
 #include "fontfs.h"
+#include "syscall.h"
 
 /*
    A lightweight, bare-metal string comparison utility.
@@ -226,6 +227,7 @@ extern "C" void keyboard_handler() {
         if (mystrcmp(cmd_buffer, "help") == true) {
             shell_print_line(">> [FontaineOS Help: help, clear, uptime, meminfo, disktest]", 0x0D);
             shell_print_line(">> [FontFS: format, ls, cat <f>, write <f> <text>, touch <f>, rm <f>]", 0x0D);
+            shell_print_line(">> [Programs: run <f> -- execute a flat binary from FontFS at ring 3]", 0x0D);
             command_processed = true;
         }
         else if (mystrcmp(cmd_buffer, "uptime") == true) {
@@ -406,6 +408,50 @@ extern "C" void keyboard_handler() {
                     shell_print_line(">> FontFS: no filesystem. Run 'format' first.", 0x0C);
                 } else {
                     shell_print_line(">> rm: error", 0x0C);
+                }
+            }
+            command_processed = true;
+        }
+        /* ---- M4: run <file> — execute a FontFS flat binary at ring 3 ----- */
+        else if (mystrcmp(verb, "run") == true) {
+            /*
+               The shell half of the program loader. IMPORTANT CONTEXT NOTE:
+               this code runs inside the keyboard IRQ handler, so it only
+               LOADS the program — reading a file with polling ATA from IRQ
+               context is the same proven pattern 'cat' uses. The actual drop
+               to ring 3 is deferred to the launcher task via
+               user_program_submit(); entering user mode from inside an IRQ
+               would break the EOI/iret chain (full rationale in
+               src/syscall.cpp above user_prog_pending).
+            */
+            first_token(argtail, fs_name_buf, (int)sizeof(fs_name_buf));
+            if (fs_name_buf[0] == '\0') {
+                shell_print_line(">> usage: run <file>", 0x0C);
+            } else if (!fontfs_is_mounted()) {
+                shell_print_line(">> FontFS: no filesystem. Run 'format' first.", 0x0C);
+            } else {
+                int len = fontfs_read(fs_name_buf, fs_file_buf, FONTFS_MAX_FILE_SIZE);
+                if (len == FONTFS_ERR_NOTFOUND) {
+                    shell_print_line(">> run: file not found", 0x0C);
+                } else if (len < 0) {
+                    shell_print_line(">> run: read error", 0x0C);
+                } else {
+                    int rc = user_program_submit(fs_file_buf, (uint32_t)len);
+                    if (rc == 0) {
+                        char reply[160];
+                        char num[11];
+                        int pos = append_str(reply, 0, ">> run: '");
+                        pos = append_str(reply, pos, fs_name_buf);
+                        pos = append_str(reply, pos, "' (");
+                        uint_to_dec((uint32_t)len, num);
+                        pos = append_str(reply, pos, num);
+                        pos = append_str(reply, pos, " bytes) loaded at 0x180000 -- entering ring 3");
+                        shell_print_line(reply, 0x0A);
+                    } else if (rc == -1) {
+                        shell_print_line(">> run: a program is already running -- try again", 0x0C);
+                    } else { /* rc == -2: empty (0 bytes) or > 8192-byte region */
+                        shell_print_line(">> run: bad size (must be 1..8192 bytes)", 0x0C);
+                    }
                 }
             }
             command_processed = true;

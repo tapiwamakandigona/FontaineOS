@@ -100,6 +100,22 @@ static void make_low_memory_user_accessible() {
 */
 static uint32_t syscall_console_cursor = 800; // row 5 of the 80x25 VGA text matrix
 
+/*
+   Blank rows 5-7 and rewind the syscall console cursor. Called by the program
+   launcher before every 'run' so each user program starts with the full
+   three-row budget instead of inheriting whatever the boot demo (or the
+   previous program) left behind — this is the "state cleaned up between runs"
+   half of the loader contract.
+*/
+static void syscall_console_reset() {
+    volatile char* video_memory = (volatile char*)0xB8000;
+    for (uint32_t i = 800; i < 1280; i += 2) {
+        video_memory[i] = ' ';
+        video_memory[i + 1] = 0x07;
+    }
+    syscall_console_cursor = 800;
+}
+
 static void syscall_console_write(const char* text, uint8_t color) {
     if (syscall_console_cursor >= 1280) return; // never collide with the FontFS row
     volatile char* video_memory = (volatile char*)0xB8000;
@@ -279,8 +295,59 @@ static void user_gpf_main() {
 
 /*
    ----------------------------------------------------------------------------
+   M4: the user-program run request shared between the shell and the launcher.
+
+   WHY THE HANDOFF EXISTS — the IRQ-context problem. The shell parser runs
+   INSIDE the keyboard IRQ handler (keyboard.cpp). Entering ring 3 from there
+   would be unsafe on two counts:
+
+     1. EOI ordering: keyboard_handler only acknowledges IRQ 1 to the PIC
+        (outb 0x20,0x20) at the very END of the handler. enter_usermode never
+        returns to its caller by falling through — control comes back via
+        kernel_reentry's stack teleport — so the EOI would only run after the
+        program exits, and meanwhile the PIC would hold ALL lower-priority
+        IRQs (including the keyboard itself) blocked. Worse, the in-service
+        IRQ1 would still be marked pending, wedging keyboard input.
+     2. Stack unwinding: the CPU delivered the keyboard interrupt on whatever
+        stack was live (a task's 4KB heap stack or the esp0 stack if ring 3
+        was interrupted). enter_usermode parks THAT esp for kernel_reentry;
+        resuming it later would 'ret' back into a half-finished IRQ frame
+        whose iret chain (and pending EOI) no longer matches reality.
+
+   So the shell only LOADS: it reads the file from FontFS (synchronous polling
+   ATA from IRQ context is the established, proven pattern — 'cat' does the
+   same), copies it into the load region via user_program_submit(), and
+   returns from the IRQ normally. The privilege drop happens in the launcher
+   task below — an ordinary scheduled kernel thread, exactly the context M3's
+   enter_usermode was designed and verified for.
+
+   'volatile' because the flag is written in IRQ context and polled by a task.
+   Single flag, no queue: user_program_submit refuses (-1 busy) while a
+   program is pending or running, preserving M3's one-user-context invariant.
+*/
+static volatile uint32_t user_prog_pending = 0; // 0 = idle, 1 = image loaded & waiting
+
+int user_program_submit(const uint8_t* image, uint32_t size) {
+    if (user_prog_pending) return -1;                      // one at a time
+    if (size == 0 || size > USER_PROG_MAX_SIZE) return -2; // empty or oversized
+
+    /*
+       Copy the image into the fixed load region. The copy happens BEFORE the
+       pending flag is raised, so the launcher can never observe a torn image.
+       Plain byte loop — freestanding kernel, no memcpy linked.
+    */
+    volatile uint8_t* dst = (volatile uint8_t*)USER_PROG_LOAD_ADDR;
+    for (uint32_t i = 0; i < size; i++) dst[i] = image[i];
+
+    user_prog_pending = 1;
+    return 0;
+}
+
+/*
+   ----------------------------------------------------------------------------
    The launcher — an ordinary scheduled kernel thread (created in kernel_main).
-   Sequences the whole ring-3 demonstration, then parks.
+   Sequences the whole ring-3 demonstration, then becomes the user-program
+   launcher loop for the shell's 'run' command.
    ----------------------------------------------------------------------------
 */
 void ring3_demo_task() {
@@ -302,8 +369,35 @@ void ring3_demo_task() {
     // Drop 2: the protection proof. Returns once the GPF handler kills the task.
     enter_usermode((uint32_t)user_gpf_main, (uint32_t)user_demo_stack + sizeof(user_demo_stack));
 
-    // Demo complete. Park forever, waking rarely so the round-robin stays lean.
+    /*
+       Demo complete. From here on this thread is the USER PROGRAM LAUNCHER:
+       it polls the pending flag the shell raises via user_program_submit()
+       and performs the ring-3 drop in ordinary task context (see the
+       IRQ-context rationale above user_prog_pending). The paging flip and
+       TSS esp0 arming from the demo above are still in force; we re-arm the
+       esp0 stack before every run anyway so the invariant survives even if a
+       future milestone moves the demo elsewhere.
+
+       Between runs the loop sleeps 10 ticks (100ms at 100Hz) — snappy enough
+       that 'run' feels immediate, idle enough that the round-robin stays
+       lean. State cleanup between runs: the syscall console is reset, the
+       user stack top is recomputed (the previous program may have left any
+       ESP behind — irrelevant, enter_usermode installs a fresh one), and the
+       pending flag is cleared only AFTER the program retired, so a second
+       'run' during execution is refused instead of clobbering the image.
+    */
     while (true) {
-        sleep(1000); // 10 seconds per wake at 100 Hz — effectively dormant
+        if (user_prog_pending) {
+            syscall_console_reset(); // fresh rows 5-7 for this program's output
+            tss_set_kernel_stack((uint32_t)ring0_syscall_stack + sizeof(ring0_syscall_stack));
+
+            // Drop to CPL=3 at the load address. Returns (via kernel_reentry)
+            // when the program sys_exits or is killed by the GPF handler.
+            enter_usermode(USER_PROG_LOAD_ADDR,
+                           (uint32_t)user_demo_stack + sizeof(user_demo_stack));
+
+            user_prog_pending = 0; // region free — the shell may load the next program
+        }
+        sleep(10);
     }
 }
